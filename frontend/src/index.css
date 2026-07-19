@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+:root {
+  --font-display: "Zilla Slab", serif;
+  --font-body: "IBM Plex Serif", serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+body {
+  background-color: #12181B;
+}
