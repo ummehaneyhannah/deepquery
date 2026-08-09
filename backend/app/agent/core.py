@@ -12,6 +12,9 @@ Design notes (why it's built this way):
 - Citations are enforced structurally: the system prompt requires the
   final answer to reference source URLs, and we track which URLs were
   actually fetched so we can flag ungrounded claims later if needed.
+- run() accepts optional prior `history` so callers (main.py) can support
+  multi-turn conversations without this class needing to know about
+  storage at all.
 """
 
 import json
@@ -33,7 +36,7 @@ over broad ones — run multiple searches rather than one vague one.
 writing your final answer. Do not fetch more than one source - keep the \
 research tight and efficient. Only fetch a URL that was literally returned \
 in a web_search result you have already seen - never invent a URL yourself.
-4. If a fetch fails (error in the tool result), do not retry the same URL — \
+4. If a fetch fails (error in the tool result), do not retry the same URL - \
 move on to a different source instead.
 5. If early results conflict or seem thin, search again with a refined \
 query rather than settling for the first answer.
@@ -59,14 +62,16 @@ class AgentResult:
     iterations_used: int
     sources_fetched: list[str] = field(default_factory=list)
     stopped_reason: str = "completed"  # "completed" | "max_iterations"
+    updated_history: list[dict] = field(default_factory=list)
 
 
 class ResearchAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self._llm = llm_client or LLMClient()
 
-    async def run(self, question: str) -> AgentResult:
-        messages: list[dict] = [{"role": "user", "content": question}]
+    async def run(self, question: str, history: list[dict] | None = None) -> AgentResult:
+        messages: list[dict] = list(history) if history else []
+        messages.append({"role": "user", "content": question})
         sources_fetched: list[str] = []
 
         for iteration in range(1, settings.max_agent_iterations + 1):
@@ -84,11 +89,13 @@ class ResearchAgent:
                 final_text = "".join(
                     block.text for block in response.content if block.type == "text"
                 )
+                messages.append({"role": "assistant", "content": final_text})
                 return AgentResult(
                     answer=final_text,
                     iterations_used=iteration,
                     sources_fetched=sources_fetched,
                     stopped_reason="completed",
+                    updated_history=messages,
                 )
 
             # Append the assistant turn, then execute every requested tool
@@ -122,6 +129,7 @@ class ResearchAgent:
             iterations_used=settings.max_agent_iterations,
             sources_fetched=sources_fetched,
             stopped_reason="max_iterations",
+            updated_history=messages,
         )
 
     @staticmethod
