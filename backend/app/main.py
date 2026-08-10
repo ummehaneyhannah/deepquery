@@ -49,6 +49,7 @@ class ResearchResponse(BaseModel):
     sources_fetched: list[str]
     stopped_reason: str
     conversation_id: str
+    image_url: str | None = None
 
 
 @app.get("/health")
@@ -75,8 +76,8 @@ async def research(request: ResearchRequest) -> ResearchResponse:
         sources_fetched=result.sources_fetched,
         stopped_reason=result.stopped_reason,
         conversation_id=conversation_id,
+        image_url=result.image_url,
     )
-
 
 @app.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str) -> dict:

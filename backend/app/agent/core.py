@@ -1,6 +1,6 @@
 """
 The ResearchAgent: the reasoning loop that turns a question into a
-sourced answer.
+sourced answer, or an image generation request into a generated image.
 
 Design notes (why it's built this way):
 - The loop is bounded (max_agent_iterations) so a confused agent can't
@@ -15,6 +15,10 @@ Design notes (why it's built this way):
 - run() accepts optional prior `history` so callers (main.py) can support
   multi-turn conversations without this class needing to know about
   storage at all.
+- image_url is tracked the same way as sources_fetched: read directly off
+  the tool_result dict returned by the tool, never off model-generated text,
+  so a hallucinated "image ready!" claim without a real tool call can never
+  produce a real image_url.
 """
 
 import json
@@ -23,11 +27,23 @@ from dataclasses import dataclass, field
 
 from app.config import settings
 from app.llm_client import LLMClient
-from app.tools import web_fetch, web_search
+from app.tools import image_generate, web_fetch, web_search
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a careful research agent. Given a research question:
+SYSTEM_PROMPT = """You are a careful research agent with image generation capability.
+
+IMPORTANT: If the user's message asks you to generate, draw, create, make, \
+or show an image/picture/illustration of anything, your ONLY valid first \
+action is to call the generate_image tool with a descriptive prompt. Do \
+NOT call web_search for image requests. Do NOT say you cannot generate \
+images. Do NOT explain how to do it manually. NEVER write a sentence like \
+"here is a picture" or "the image has been generated" unless you have \
+actually called generate_image and received a real image_url back in the \
+tool result - if you have not called that tool yet, call it now instead of \
+answering.
+
+For research questions, follow this process:
 
 1. Break it into sub-questions if it's broad.
 2. Use web_search to find candidate sources. Prefer specific, narrow queries \
@@ -48,11 +64,12 @@ plainly rather than guessing.
 
 Be concise. Do not pad the answer with restated questions or filler."""
 
-TOOLS = [web_search.TOOL_SCHEMA, web_fetch.TOOL_SCHEMA]
+TOOLS = [web_search.TOOL_SCHEMA, web_fetch.TOOL_SCHEMA, image_generate.TOOL_SCHEMA]
 
 _TOOL_DISPATCH = {
     "web_search": web_search.run,
     "web_fetch": web_fetch.run,
+    "generate_image": image_generate.run,
 }
 
 
@@ -63,6 +80,7 @@ class AgentResult:
     sources_fetched: list[str] = field(default_factory=list)
     stopped_reason: str = "completed"  # "completed" | "max_iterations"
     updated_history: list[dict] = field(default_factory=list)
+    image_url: str | None = None
 
 
 class ResearchAgent:
@@ -73,6 +91,7 @@ class ResearchAgent:
         messages: list[dict] = list(history) if history else []
         messages.append({"role": "user", "content": question})
         sources_fetched: list[str] = []
+        image_url: str | None = None
 
         for iteration in range(1, settings.max_agent_iterations + 1):
             response = self._llm.create_message(
@@ -96,6 +115,7 @@ class ResearchAgent:
                     sources_fetched=sources_fetched,
                     stopped_reason="completed",
                     updated_history=messages,
+                    image_url=image_url,
                 )
 
             # Append the assistant turn, then execute every requested tool
@@ -104,8 +124,17 @@ class ResearchAgent:
             tool_results = []
             for tool_use in tool_uses:
                 result = await self._execute_tool(tool_use.name, tool_use.input)
-                if tool_use.name == "web_fetch" and "url" in tool_use.input and "error" not in result:
+
+                if (
+                    tool_use.name == "web_fetch"
+                    and "url" in tool_use.input
+                    and "error" not in result
+                ):
                     sources_fetched.append(tool_use.input["url"])
+
+                if tool_use.name == "generate_image" and "image_url" in result:
+                    image_url = result["image_url"]
+
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -130,6 +159,7 @@ class ResearchAgent:
             sources_fetched=sources_fetched,
             stopped_reason="max_iterations",
             updated_history=messages,
+            image_url=image_url,
         )
 
     @staticmethod

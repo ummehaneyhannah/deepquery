@@ -43,7 +43,12 @@ function App() {
       setConversationId(data.conversation_id)
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: data.answer, sources: data.sources_fetched || [] },
+        {
+          role: 'assistant',
+          text: data.answer,
+          sources: data.sources_fetched || [],
+          imageUrl: data.image_url || null,
+        },
       ])
       setStatus('idle')
     } catch (err) {
@@ -146,6 +151,14 @@ function App() {
                 >
                   {msg.text}
                 </p>
+                {msg.imageUrl && (
+                  <img
+                    src={msg.imageUrl}
+                    alt="Generated"
+                    className="rounded-lg border border-[#12181B]/15 max-w-full"
+                    loading="lazy"
+                  />
+                )}
                 {msg.sources && msg.sources.length > 0 && (
                   <div className="border-t border-[#12181B]/15 pt-2">
                     <span
