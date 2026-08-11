@@ -13,12 +13,13 @@ changing the API shape.
 import logging
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.agent.core import ResearchAgent
 from app.config import settings
+from app.tools import pdf_reader
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ _agent = ResearchAgent()
 
 # conversation_id -> list of message dicts (the agent's internal format)
 _conversations: dict[str, list[dict]] = {}
+# conversation_id -> extracted PDF text, injected as context on the next question
+_pdf_context: dict[str, str] = {}
 
 
 class ResearchRequest(BaseModel):
@@ -62,8 +65,19 @@ async def research(request: ResearchRequest) -> ResearchResponse:
     conversation_id = request.conversation_id or str(uuid.uuid4())
     history = _conversations.get(conversation_id, [])
 
+    question = request.question
+    pdf_text = _pdf_context.pop(conversation_id, None)  # use once, then clear
+    if pdf_text:
+        question = (
+            f"[The user has uploaded a PDF. Its content is below. Use it to "
+            f"answer the question that follows, citing page/section context "
+            f"where relevant instead of external sources.]\n\n"
+            f"--- PDF CONTENT START ---\n{pdf_text}\n--- PDF CONTENT END ---\n\n"
+            f"Question: {request.question}"
+        )
+
     try:
-        result = await _agent.run(request.question, history=history)
+        result = await _agent.run(question, history=history)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent run failed")
         raise HTTPException(status_code=500, detail="Agent failed to complete research.") from exc
@@ -83,3 +97,23 @@ async def research(request: ResearchRequest) -> ResearchResponse:
 async def delete_conversation(conversation_id: str) -> dict:
     _conversations.pop(conversation_id, None)
     return {"deleted": conversation_id}
+@app.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...), conversation_id: str | None = None) -> dict:
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    file_bytes = await file.read()
+    result = pdf_reader.extract_text(file_bytes)
+
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    cid = conversation_id or str(uuid.uuid4())
+    _pdf_context[cid] = result["text"]
+
+    return {
+        "conversation_id": cid,
+        "page_count": result["page_count"],
+        "truncated": result["truncated"],
+        "preview": result["text"][:200],
+    }

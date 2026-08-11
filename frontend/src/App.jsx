@@ -6,9 +6,12 @@ function App() {
   const [question, setQuestion] = useState('')
   const [status, setStatus] = useState('idle') // idle | loading | error
   const [errorMsg, setErrorMsg] = useState('')
-  const [messages, setMessages] = useState([]) // { role: 'user'|'assistant', text, sources? }
+  const [messages, setMessages] = useState([]) // { role, text, sources?, imageUrl? }
   const [conversationId, setConversationId] = useState(null)
+  const [pdfName, setPdfName] = useState(null)
+  const [pdfStatus, setPdfStatus] = useState('idle') // idle | uploading | attached | error
   const bottomRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -51,9 +54,55 @@ function App() {
         },
       ])
       setStatus('idle')
+      // A PDF's context is consumed by the backend after one question, so
+      // clear the attached badge once it's been used.
+      setPdfName(null)
+      setPdfStatus('idle')
     } catch (err) {
       setErrorMsg(err.message || 'Something went wrong reaching the agent.')
       setStatus('error')
+    }
+  }
+
+  async function handlePdfSelect(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (file.type !== 'application/pdf') {
+      setPdfStatus('error')
+      setErrorMsg('Only PDF files are supported.')
+      e.target.value = ''
+      return
+    }
+
+    setPdfStatus('uploading')
+    setErrorMsg('')
+
+    const formData = new FormData()
+    formData.append('file', file)
+    if (conversationId) formData.append('conversation_id', conversationId)
+
+    try {
+      const url =
+        API_URL +
+        '/upload-pdf' +
+        (conversationId ? '?conversation_id=' + encodeURIComponent(conversationId) : '')
+      const res = await fetch(url, { method: 'POST', body: formData })
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || 'Upload failed (' + res.status + ')')
+      }
+
+      const data = await res.json()
+      setConversationId(data.conversation_id)
+      setPdfName(file.name)
+      setPdfStatus('attached')
+    } catch (err) {
+      setPdfStatus('error')
+      setErrorMsg(err.message || 'Failed to upload PDF.')
+    } finally {
+      e.target.value = ''
     }
   }
 
@@ -62,6 +111,8 @@ function App() {
     setConversationId(null)
     setErrorMsg('')
     setStatus('idle')
+    setPdfName(null)
+    setPdfStatus('idle')
   }
 
   return (
@@ -116,7 +167,7 @@ function App() {
             className="text-sm text-[#EFE9DD]/40 text-center mt-16"
             style={{ fontFamily: 'var(--font-mono)' }}
           >
-            Ask a question below to open the wire.
+            Ask a question below to open the wire, or attach a PDF to discuss it.
           </div>
         )}
 
@@ -214,33 +265,75 @@ function App() {
       </main>
 
       {/* Input bar (sticky at bottom) */}
-      <form
-        onSubmit={handleSubmit}
-        className="border-t border-[#EFE9DD]/15 px-6 py-4"
-      >
-        <div className="max-w-2xl w-full mx-auto flex gap-3">
-          <textarea
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSubmit(e)
-              }
-            }}
-            placeholder="Ask a follow-up or start a new inquiry..."
-            rows={1}
-            className="flex-1 bg-transparent border border-[#EFE9DD]/25 rounded px-4 py-3 text-[#EFE9DD] placeholder-[#EFE9DD]/30 focus:outline-none focus:border-[#C98A2C] resize-none"
-            style={{ fontFamily: 'var(--font-body)' }}
-          />
-          <button
-            type="submit"
-            disabled={status === 'loading' || !question.trim()}
-            className="px-5 py-2 rounded bg-[#C98A2C] text-[#12181B] font-semibold tracking-wide disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#dba24a] transition-colors"
-            style={{ fontFamily: 'var(--font-mono)' }}
-          >
-            {status === 'loading' ? 'SENDING...' : 'SEND'}
-          </button>
+      <form onSubmit={handleSubmit} className="border-t border-[#EFE9DD]/15 px-6 py-4">
+        <div className="max-w-2xl w-full mx-auto flex flex-col gap-2">
+          {pdfStatus === 'attached' && pdfName && (
+            <div
+              className="self-start flex items-center gap-2 text-xs text-[#C98A2C] border border-[#C98A2C]/40 rounded px-3 py-1.5"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              📎 {pdfName} attached — ask your question below
+              <button
+                type="button"
+                onClick={() => {
+                  setPdfName(null)
+                  setPdfStatus('idle')
+                }}
+                className="text-[#EFE9DD]/50 hover:text-[#A8453A]"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {pdfStatus === 'uploading' && (
+            <div
+              className="self-start text-xs text-[#EFE9DD]/50 animate-pulse"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              Uploading PDF...
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf"
+              onChange={handlePdfSelect}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={pdfStatus === 'uploading' || status === 'loading'}
+              title="Attach a PDF"
+              className="px-3 py-2 rounded border border-[#EFE9DD]/25 text-[#EFE9DD]/70 hover:text-[#C98A2C] hover:border-[#C98A2C] disabled:opacity-40 transition-colors"
+            >
+              📎
+            </button>
+            <textarea
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSubmit(e)
+                }
+              }}
+              placeholder="Ask a follow-up or start a new inquiry..."
+              rows={1}
+              className="flex-1 bg-transparent border border-[#EFE9DD]/25 rounded px-4 py-3 text-[#EFE9DD] placeholder-[#EFE9DD]/30 focus:outline-none focus:border-[#C98A2C] resize-none"
+              style={{ fontFamily: 'var(--font-body)' }}
+            />
+            <button
+              type="submit"
+              disabled={status === 'loading' || !question.trim()}
+              className="px-5 py-2 rounded bg-[#C98A2C] text-[#12181B] font-semibold tracking-wide disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#dba24a] transition-colors"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            >
+              {status === 'loading' ? 'SENDING...' : 'SEND'}
+            </button>
+          </div>
         </div>
       </form>
     </div>
