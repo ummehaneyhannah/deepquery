@@ -3,13 +3,26 @@ Groq-backed LLM client (OpenAI-compatible chat completions API), kept
 interface-compatible with the previous wrappers: create_message returns
 an object with a `.content` list of TextBlock/ToolUseBlock instances,
 so app.agent.core does not need to change.
+
+Fallback design:
+- The primary model (settings.groq_model) is tried first.
+- If Groq returns a RateLimitError (429 — daily/per-minute quota exhausted),
+  the client automatically retries the SAME request against a smaller
+  fallback model (settings.groq_fallback_model), which has its own
+  separate quota pool on Groq's free tier.
+- Malformed tool-call errors (tool_use_failed) are retried against the
+  SAME model with a few attempts first, since those are transient
+  generation glitches, not quota exhaustion — retrying on a different
+  model wouldn't reliably fix that class of error.
+- If the fallback model also fails, the original error is raised so the
+  caller (main.py) can surface a clear message rather than fail silently.
 """
 
 import json
 import logging
 from dataclasses import dataclass
 
-from groq import BadRequestError, Groq
+from groq import BadRequestError, Groq, RateLimitError
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_fixed
 
 from app.config import settings
@@ -111,6 +124,7 @@ def _to_response(completion) -> _Response:
         )
     return _Response(blocks)
 
+
 def _is_malformed_tool_call(exc: BaseException) -> bool:
     """
     Llama models on Groq occasionally emit a malformed tool-call token
@@ -128,13 +142,31 @@ class LLMClient:
         stop=stop_after_attempt(3),
         reraise=True,
     )
-    def create_message(self, messages, system, tools=None, max_tokens=4096):
-        openai_messages = _to_openai_messages(messages, system)
-        completion = _client.chat.completions.create(
-            model=settings.groq_model,
+    def _call_model(self, model: str, openai_messages: list[dict], tools, max_tokens: int):
+        return _client.chat.completions.create(
+            model=model,
             messages=openai_messages,
-            tools=_convert_tools(tools),
+            tools=tools,
             max_tokens=max_tokens,
             temperature=0.3,
         )
+
+    def create_message(self, messages, system, tools=None, max_tokens=4096):
+        openai_messages = _to_openai_messages(messages, system)
+        converted_tools = _convert_tools(tools)
+
+        try:
+            completion = self._call_model(
+                settings.groq_model, openai_messages, converted_tools, max_tokens
+            )
+        except RateLimitError:
+            logger.warning(
+                "Primary model %s hit rate limit — falling back to %s",
+                settings.groq_model,
+                settings.groq_fallback_model,
+            )
+            completion = self._call_model(
+                settings.groq_fallback_model, openai_messages, converted_tools, max_tokens
+            )
+
         return _to_response(completion)
