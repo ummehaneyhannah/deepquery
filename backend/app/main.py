@@ -14,13 +14,13 @@ import logging
 import uuid
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.agent.core import ResearchAgent
 from app.config import settings
-from app.tools import pdf_reader
-
+from app.tools import pdf_reader, pdf_writer
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,11 @@ class ResearchResponse(BaseModel):
     stopped_reason: str
     conversation_id: str
     image_url: str | None = None
-
+    
+class PdfExportRequest(BaseModel):
+    question: str
+    answer: str
+    sources: list[str] = []
 
 @app.get("/health")
 async def health() -> dict:
@@ -117,3 +121,12 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: str | None =
         "truncated": result["truncated"],
         "preview": result["text"][:200],
     }
+    
+@app.post("/export-pdf")
+async def export_pdf(request: PdfExportRequest) -> Response:
+    pdf_bytes = pdf_writer.build_pdf(request.question, request.answer, request.sources)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=deepquery-dispatch.pdf"},
+    )    

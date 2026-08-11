@@ -40,3 +40,4 @@ watchfiles==1.2.0
 websockets==16.1
 pypdf>=5.1.0
 python-multipart>=0.0.12
+reportlab>=4.2.0

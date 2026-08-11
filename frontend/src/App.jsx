@@ -6,10 +6,11 @@ function App() {
   const [question, setQuestion] = useState('')
   const [status, setStatus] = useState('idle') // idle | loading | error
   const [errorMsg, setErrorMsg] = useState('')
-  const [messages, setMessages] = useState([]) // { role, text, sources?, imageUrl? }
+  const [messages, setMessages] = useState([]) // { role, text, sources?, imageUrl?, userQuestion? }
   const [conversationId, setConversationId] = useState(null)
   const [pdfName, setPdfName] = useState(null)
   const [pdfStatus, setPdfStatus] = useState('idle') // idle | uploading | attached | error
+  const [downloadingIndex, setDownloadingIndex] = useState(null)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -51,11 +52,10 @@ function App() {
           text: data.answer,
           sources: data.sources_fetched || [],
           imageUrl: data.image_url || null,
+          userQuestion: userText,
         },
       ])
       setStatus('idle')
-      // A PDF's context is consumed by the backend after one question, so
-      // clear the attached badge once it's been used.
       setPdfName(null)
       setPdfStatus('idle')
     } catch (err) {
@@ -103,6 +103,38 @@ function App() {
       setErrorMsg(err.message || 'Failed to upload PDF.')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  async function handleDownloadPdf(msg, index) {
+    setDownloadingIndex(index)
+    try {
+      const res = await fetch(API_URL + '/export-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: msg.userQuestion || '',
+          answer: msg.text,
+          sources: msg.sources || [],
+        }),
+      })
+
+      if (!res.ok) throw new Error('PDF export failed (' + res.status + ')')
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'deepquery-dispatch.pdf'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to download PDF.')
+      setStatus('error')
+    } finally {
+      setDownloadingIndex(null)
     }
   }
 
@@ -238,6 +270,16 @@ function App() {
                     </ol>
                   </div>
                 )}
+                <div className="border-t border-[#12181B]/15 pt-2">
+                  <button
+                    onClick={() => handleDownloadPdf(msg, i)}
+                    disabled={downloadingIndex === i}
+                    className="text-xs uppercase tracking-widest text-[#12181B]/60 hover:text-[#C98A2C] border border-[#12181B]/25 rounded px-3 py-1.5 disabled:opacity-40 transition-colors"
+                    style={{ fontFamily: 'var(--font-mono)' }}
+                  >
+                    {downloadingIndex === i ? 'Preparing PDF...' : '⬇ Download as PDF'}
+                  </button>
+                </div>
               </article>
             </div>
           )
