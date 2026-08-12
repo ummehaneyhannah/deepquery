@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
     groq_fallback_model: str ="openai/gpt-oss-20b"
+    # Database (Supabase)
+    supabase_url: str
+    supabase_key: str
     # Search
     tavily_api_key: str
 

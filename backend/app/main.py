@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.core import ResearchAgent
 from app.config import settings
+from app import db
 from app.tools import pdf_reader, pdf_writer
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -36,11 +37,7 @@ app.add_middleware(
 _agent = ResearchAgent()
 
 # conversation_id -> list of message dicts (the agent's internal format)
-_conversations: dict[str, list[dict]] = {}
-# conversation_id -> extracted PDF text, injected as context on the next question
-# conversation_id -> list of text chunks from the uploaded PDF, used for
-# retrieval on every question in that conversation (not just once).
-_pdf_chunks: dict[str, list[str]] = {}
+
 
 
 class ResearchRequest(BaseModel):
@@ -69,10 +66,10 @@ async def health() -> dict:
 @app.post("/research", response_model=ResearchResponse)
 async def research(request: ResearchRequest) -> ResearchResponse:
     conversation_id = request.conversation_id or str(uuid.uuid4())
-    history = _conversations.get(conversation_id, [])
+    history = db.get_history(conversation_id)
 
     question = request.question
-    chunks = _pdf_chunks.get(conversation_id)
+    chunks = db.get_pdf_chunks(conversation_id)
     if chunks:
         relevant_chunks = pdf_reader.retrieve_relevant_chunks(chunks, request.question)
         context_block = "\n\n---\n\n".join(relevant_chunks)
@@ -91,7 +88,7 @@ async def research(request: ResearchRequest) -> ResearchResponse:
         logger.exception("Agent run failed")
         raise HTTPException(status_code=500, detail="Agent failed to complete research.") from exc
 
-    _conversations[conversation_id] = result.updated_history
+    db.save_history(conversation_id, result.updated_history)
 
     return ResearchResponse(
         answer=result.answer,
@@ -104,7 +101,7 @@ async def research(request: ResearchRequest) -> ResearchResponse:
 
 @app.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str) -> dict:
-    _conversations.pop(conversation_id, None)
+    db.save_history(conversation_id, [])
     return {"deleted": conversation_id}
 
 
@@ -121,7 +118,7 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: str | None =
 
     cid = conversation_id or str(uuid.uuid4())
     chunks = pdf_reader.chunk_text(result["text"])
-    _pdf_chunks[cid] = chunks
+    db.save_pdf_chunks(cid, chunks)
 
     return {
         "conversation_id": cid,
