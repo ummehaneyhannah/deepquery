@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"
     groq_api_key: str
     groq_model: str = "llama-3.3-70b-versatile"
-    groq_fallback_model: str = "llama-3.1-8b-instant"
+    groq_fallback_model: str ="openai/gpt-oss-20b"
     # Search
     tavily_api_key: str
 
