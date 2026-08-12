@@ -38,7 +38,9 @@ _agent = ResearchAgent()
 # conversation_id -> list of message dicts (the agent's internal format)
 _conversations: dict[str, list[dict]] = {}
 # conversation_id -> extracted PDF text, injected as context on the next question
-_pdf_context: dict[str, str] = {}
+# conversation_id -> list of text chunks from the uploaded PDF, used for
+# retrieval on every question in that conversation (not just once).
+_pdf_chunks: dict[str, list[str]] = {}
 
 
 class ResearchRequest(BaseModel):
@@ -70,13 +72,16 @@ async def research(request: ResearchRequest) -> ResearchResponse:
     history = _conversations.get(conversation_id, [])
 
     question = request.question
-    pdf_text = _pdf_context.pop(conversation_id, None)  # use once, then clear
-    if pdf_text:
+    chunks = _pdf_chunks.get(conversation_id)
+    if chunks:
+        relevant_chunks = pdf_reader.retrieve_relevant_chunks(chunks, request.question)
+        context_block = "\n\n---\n\n".join(relevant_chunks)
         question = (
-            f"[The user has uploaded a PDF. Its content is below. Use it to "
-            f"answer the question that follows, citing page/section context "
-            f"where relevant instead of external sources.]\n\n"
-            f"--- PDF CONTENT START ---\n{pdf_text}\n--- PDF CONTENT END ---\n\n"
+            f"[The user has an uploaded PDF attached to this conversation. "
+            f"Below are the most relevant excerpts (retrieved based on your "
+            f"question) — not the full document. Use them to answer, and say "
+            f"so if the excerpts don't seem to contain the answer.]\n\n"
+            f"--- RELEVANT PDF EXCERPTS ---\n{context_block}\n--- END EXCERPTS ---\n\n"
             f"Question: {request.question}"
         )
 
@@ -101,6 +106,8 @@ async def research(request: ResearchRequest) -> ResearchResponse:
 async def delete_conversation(conversation_id: str) -> dict:
     _conversations.pop(conversation_id, None)
     return {"deleted": conversation_id}
+
+
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...), conversation_id: str | None = None) -> dict:
     if file.content_type != "application/pdf":
@@ -113,12 +120,13 @@ async def upload_pdf(file: UploadFile = File(...), conversation_id: str | None =
         raise HTTPException(status_code=422, detail=result["error"])
 
     cid = conversation_id or str(uuid.uuid4())
-    _pdf_context[cid] = result["text"]
+    chunks = pdf_reader.chunk_text(result["text"])
+    _pdf_chunks[cid] = chunks
 
     return {
         "conversation_id": cid,
         "page_count": result["page_count"],
-        "truncated": result["truncated"],
+        "chunk_count": len(chunks),
         "preview": result["text"][:200],
     }
     

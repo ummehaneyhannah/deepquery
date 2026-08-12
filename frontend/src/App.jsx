@@ -56,8 +56,9 @@ function App() {
         },
       ])
       setStatus('idle')
-      setPdfName(null)
-      setPdfStatus('idle')
+      // PDF context now persists for the whole conversation (RAG-based
+      // retrieval runs on every question), so we no longer clear the
+      // attached badge here.
     } catch (err) {
       setErrorMsg(err.message || 'Something went wrong reaching the agent.')
       setStatus('error')
