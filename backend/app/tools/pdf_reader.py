@@ -22,8 +22,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_WORDS = 400  # ~500-600 tokens per chunk, a reasonable retrieval unit
-_TOP_K = 3  # how many chunks to hand the agent per question
+_CHUNK_WORDS = 250  # smaller chunks keep retrieved context lighter
+_TOP_K = 2  # fewer chunks per question, to stay within small-model TPM limits
 
 
 def extract_text(file_bytes: bytes) -> dict:
