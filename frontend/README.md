@@ -32,8 +32,8 @@ visuals, and discuss documents in depth.
 - **Image generation:** Pollinations.ai
 - **PDF Q&A:** pypdf (extraction) + scikit-learn TF-IDF (lightweight RAG retrieval)
 - **PDF export:** reportlab
+- **Database:** Supabase (Postgres) — persistent conversation history and PDF chunks
 - **Deployment:** Render (backend), Vercel (frontend)
-
 ## Project structure
 ## Running locally
 
@@ -82,9 +82,17 @@ See `backend/.env.example` for the required keys (Groq API key, Tavily API key).
 
 ## Known limitations
 
-- Conversation history and uploaded PDF chunks are stored in-memory on
-  the backend, so they reset if the server restarts (e.g. Render's free
-  tier spinning down from inactivity). A persistent database would fix this.
+- Retrieval uses TF-IDF (sparse, keyword-based) rather than neural
+  embeddings — a deliberate tradeoff to stay within free-tier hosting
+  memory limits (loading an embedding model risks exceeding Render's
+  512MB free-instance RAM). Works well for keyword-heavy queries; a
+  future upgrade path would add dense vector embeddings for better
+  semantic matching.
+- Running on free-tier APIs (Groq, Tavily), so there are daily/per-minute
+  rate limits — mitigated by automatic model fallback, but not eliminated.
+- No per-user accounts or API key isolation — all users currently share
+  the same backend quota and database rows are keyed only by
+  conversation ID, not by user.
 - Retrieval uses TF-IDF (sparse, keyword-based) rather than neural
   embeddings — a deliberate tradeoff to stay within free-tier hosting
   memory limits (loading an embedding model risks exceeding Render's
@@ -98,6 +106,6 @@ See `backend/.env.example` for the required keys (Groq API key, Tavily API key).
 
 ## Status
 
-Working product with multi-turn conversation, image generation, and
-RAG-based PDF Q&A, deployed publicly. Core features are functional and
-tested end-to-end.
+Working product with persistent multi-turn conversation (backed by a
+real database), image generation, and RAG-based PDF Q&A, deployed
+publicly. Core features are functional and tested end-to-end.
